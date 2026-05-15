@@ -3,6 +3,7 @@
  */
 import { ProviderCategory } from "../types";
 import type { PresetTheme } from "./claudeProviderPresets";
+import type { ProviderMeta } from "../types";
 
 export interface CodexProviderPreset {
   name: string;
@@ -24,6 +25,8 @@ export interface CodexProviderPreset {
   // 图标配置
   icon?: string; // 图标名称
   iconColor?: string; // 图标颜色
+  // 供应商元数据（CC Switch 内部使用）
+  meta?: Partial<ProviderMeta>;
 }
 
 /**
@@ -42,6 +45,7 @@ export function generateThirdPartyConfig(
   providerName: string,
   baseUrl: string,
   modelName = "gpt-5.4",
+  wireApi = "responses",
 ): string {
   // 清理供应商名称，确保符合TOML键名规范
   const cleanProviderName =
@@ -58,7 +62,7 @@ disable_response_storage = true
 [model_providers.${cleanProviderName}]
 name = "${cleanProviderName}"
 base_url = "${baseUrl}"
-wire_api = "responses"
+wire_api = "${wireApi}"
 requires_openai_auth = true`;
 }
 
@@ -488,5 +492,23 @@ base_url = "https://cc-api.pipellm.ai/v1"`,
     ),
     endpointCandidates: ["https://api.therouter.ai/v1"],
     category: "aggregator",
+  },
+  {
+    name: "Minimax",
+    websiteUrl: "https://platform.minimax.io",
+    apiKeyUrl: "https://platform.minimaxi.com/subscribe/coding-plan",
+    auth: generateThirdPartyAuth(""),
+    config: generateThirdPartyConfig(
+      "minimax",
+      "https://api.minimaxi.com/v1",
+      "codex-MiniMax-M2.7",
+      "responses",
+    ),
+    category: "cn_official",
+    icon: "minimax",
+    iconColor: "#FF6B6B",
+    meta: {
+      apiFormat: "minimax_chat",
+    },
   },
 ];

@@ -15,9 +15,10 @@ use super::{
     handler_context::RequestContext,
     providers::{
         get_adapter, get_claude_api_format, streaming::create_anthropic_sse_stream,
-        streaming_gemini::create_anthropic_sse_stream_from_gemini,
-        streaming_responses::create_anthropic_sse_stream_from_responses, transform,
-        transform_gemini, transform_responses,
+        streaming_responses, streaming_gemini::create_anthropic_sse_stream_from_gemini,
+        streaming_responses::create_anthropic_sse_stream_from_responses,
+        streaming_responses_to_chat::create_chat_sse_stream_from_responses, transform,
+        transform_chat_to_responses, transform_gemini, transform_responses,
     },
     response_processor::{
         create_logged_passthrough_stream, process_response, read_decoded_body,
@@ -435,8 +436,35 @@ pub async fn handle_responses(
 
     let mut ctx =
         RequestContext::new(&state, &body, &headers, AppType::Codex, "Codex", "codex").await?;
-    let endpoint = endpoint_with_query(&uri, "/responses");
 
+    // 检查是否需要格式转换（MiniMax 等）
+    let adapter = get_adapter(&AppType::Codex);
+    let needs_transform = adapter.needs_transform(&ctx.provider);
+    let is_minimax_chat = ctx
+        .provider
+        .meta
+        .as_ref()
+        .and_then(|m| m.api_format.as_deref())
+        == Some("minimax_chat");
+    let is_full_url = ctx
+        .provider
+        .meta
+        .as_ref()
+        .and_then(|m| m.is_full_url)
+        .unwrap_or(false);
+
+    // 确定端点：MiniMax 使用 /chat/completions 端点
+    // 注意：请求体转换在 forwarder 中统一处理（通过 adapter.transform_request）
+    // 这里只确定端点路径，不做请求体转换，避免双重转换问题
+    let endpoint = if needs_transform && is_minimax_chat {
+        // MiniMax 使用 /chat/completions 端点
+        endpoint_with_query(&uri, "/chat/completions")
+    } else {
+        endpoint_with_query(&uri, "/responses")
+    };
+
+    // 注意：不再在这里转换请求体，而是传递原始 body 给 forwarder
+    // forwarder 会通过 adapter.transform_request 统一处理格式转换
     let is_stream = body
         .get("stream")
         .and_then(|v| v.as_bool())
@@ -466,6 +494,59 @@ pub async fn handle_responses(
 
     ctx.provider = result.provider;
     let response = result.response;
+
+    if needs_transform && is_stream {
+        // 流式响应转换
+        let response_status = response.status();
+        let response_headers = response.headers().clone();
+        let stream = response.bytes_stream();
+
+        // 根据 api_format 选择正确的转换器
+        // - minimax_chat: Chat Completions SSE → Responses API SSE (上游返回 Chat Completions)
+        // - 其他: Responses API SSE → Chat Completions SSE (上游返回 Responses)
+        let sse_stream: Box<dyn futures::Stream<Item = Result<Bytes, std::io::Error>> + Send + Unpin> =
+            if is_minimax_chat {
+                // MiniMax 上游返回 Chat Completions SSE，转换为 Responses API SSE
+                Box::new(Box::pin(crate::proxy::providers::streaming_chat_to_responses::create_responses_sse_stream_from_chat(stream)))
+            } else {
+                // 其他上游返回 Responses API SSE，转换为 Chat Completions SSE
+                Box::new(Box::pin(crate::proxy::providers::streaming_responses_to_chat::create_chat_sse_stream_from_responses(stream)))
+            };
+
+        let mut builder = axum::response::Response::builder().status(response_status);
+        for (key, value) in response_headers.iter() {
+            builder = builder.header(key, value);
+        }
+        builder = builder.header("content-type", "text/event-stream");
+
+        let body = axum::body::Body::from_stream(sse_stream);
+        return builder
+            .body(body)
+            .map_err(|e| ProxyError::Internal(format!("Failed to build streaming response: {e}")));
+    }
+
+    if needs_transform && !is_stream {
+        // 非流式响应：Chat Completions JSON → Responses API JSON
+        let (response_headers, status, body_bytes) =
+            read_decoded_body(response, ctx.tag, std::time::Duration::ZERO).await?;
+        let body_json: Value = serde_json::from_slice(&body_bytes)
+            .map_err(|e| ProxyError::Internal(format!("Failed to parse response JSON: {e}")))?;
+
+        let transformed = adapter.transform_response(body_json, &ctx.provider)?;
+
+        let response_json = serde_json::to_string(&transformed)
+            .map_err(|e| ProxyError::Internal(format!("Failed to serialize response: {e}")))?;
+
+        let mut builder = axum::response::Response::builder().status(status);
+        for (key, value) in response_headers.iter() {
+            builder = builder.header(key, value);
+        }
+        builder = builder.header("content-type", "application/json");
+
+        return builder
+            .body(axum::body::Body::from(response_json))
+            .map_err(|e| ProxyError::Internal(format!("Failed to build response: {e}")));
+    }
 
     process_response(response, &ctx, &state, &CODEX_PARSER_CONFIG).await
 }

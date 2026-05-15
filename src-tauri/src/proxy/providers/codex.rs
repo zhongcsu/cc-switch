@@ -180,6 +180,57 @@ impl ProviderAdapter for CodexAdapter {
             http::HeaderValue::from_str(&bearer).unwrap(),
         )]
     }
+
+    fn needs_transform(&self, provider: &Provider) -> bool {
+        // Check if provider has api_format set that requires transformation
+        if let Some(meta) = provider.meta.as_ref() {
+            if let Some(api_format) = meta.api_format.as_deref() {
+                return matches!(api_format, "minimax_chat");
+            }
+        }
+        false
+    }
+
+    fn transform_request(
+        &self,
+        body: serde_json::Value,
+        provider: &Provider,
+    ) -> Result<serde_json::Value, ProxyError> {
+        // Check api_format from provider meta
+        if let Some(meta) = provider.meta.as_ref() {
+            if let Some(api_format) = meta.api_format.as_deref() {
+                match api_format {
+                    "minimax_chat" => {
+                        // MiniMax expects Chat Completions format
+                        // Convert from Responses API (which Codex CLI sends) to Chat Completions
+                        let mut result = super::transform_chat_to_responses::responses_to_chat_completions_request(body)?;
+                        // Enable reasoning_split to get thinking content via reasoning_details field
+                        result["reasoning_split"] = serde_json::json!(true);
+                        return Ok(result);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(body)
+    }
+
+    fn transform_response(&self, body: serde_json::Value, provider: &Provider) -> Result<serde_json::Value, ProxyError> {
+        // Check api_format from provider meta
+        if let Some(meta) = provider.meta.as_ref() {
+            if let Some(api_format) = meta.api_format.as_deref() {
+                match api_format {
+                    "minimax_chat" => {
+                        // MiniMax returns Chat Completions format
+                        // Convert to Responses API format for Codex CLI
+                        return super::transform_chat_to_responses::chat_completions_to_responses_response(body);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(body)
+    }
 }
 
 #[cfg(test)]

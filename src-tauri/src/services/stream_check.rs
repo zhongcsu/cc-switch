@@ -522,7 +522,11 @@ impl StreamCheckService {
             .as_ref()
             .and_then(|meta| meta.is_full_url)
             .unwrap_or(false);
-        let urls = Self::resolve_codex_stream_urls(base_url, is_full_url);
+        let api_format = provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.api_format.as_deref());
+        let urls = Self::resolve_codex_stream_urls(base_url, is_full_url, api_format);
 
         // 解析模型名和推理等级 (支持 model@level 或 model#level 格式)
         let (actual_model, reasoning_effort) = Self::parse_model_with_effort(model);
@@ -531,12 +535,23 @@ impl StreamCheckService {
         let os_name = Self::get_os_name();
         let arch_name = Self::get_arch_name();
 
-        // Responses API 请求体格式 (input 必须是数组)
-        let mut body = json!({
-            "model": actual_model,
-            "input": [{ "role": "user", "content": test_prompt }],
-            "stream": true
-        });
+        // 根据 api_format 选择请求体格式
+        let is_minimax_chat = api_format == Some("minimax_chat");
+        let mut body = if is_minimax_chat {
+            // Chat Completions 格式 (MiniMax)
+            json!({
+                "model": actual_model,
+                "messages": [{ "role": "user", "content": test_prompt }],
+                "stream": true
+            })
+        } else {
+            // Responses API 格式 (Codex CLI 默认)
+            json!({
+                "model": actual_model,
+                "input": [{ "role": "user", "content": test_prompt }],
+                "stream": true
+            })
+        };
 
         // 如果是推理模型，添加 reasoning_effort
         if let Some(effort) = reasoning_effort {
@@ -1489,13 +1504,30 @@ impl StreamCheckService {
         }
     }
 
-    fn resolve_codex_stream_urls(base_url: &str, is_full_url: bool) -> Vec<String> {
+    fn resolve_codex_stream_urls(
+        base_url: &str,
+        is_full_url: bool,
+        api_format: Option<&str>,
+    ) -> Vec<String> {
         if is_full_url {
             return vec![base_url.to_string()];
         }
 
         let base = base_url.trim_end_matches('/');
 
+        // MiniMax with minimax_chat uses Chat Completions endpoint
+        if api_format == Some("minimax_chat") {
+            if base.ends_with("/v1") {
+                return vec![format!("{base}/chat/completions")];
+            } else {
+                return vec![
+                    format!("{base}/chat/completions"),
+                    format!("{base}/v1/chat/completions"),
+                ];
+            }
+        }
+
+        // Default: Responses API
         if base.ends_with("/v1") {
             vec![format!("{base}/responses")]
         } else {

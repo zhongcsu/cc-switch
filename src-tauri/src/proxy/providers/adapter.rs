@@ -44,7 +44,7 @@ pub trait ProviderAdapter: Send + Sync {
 
     /// 转换响应体
     #[allow(dead_code)]
-    fn transform_response(&self, body: Value) -> Result<Value, ProxyError> {
+    fn transform_response(&self, body: Value, _provider: &Provider) -> Result<Value, ProxyError> {
         Ok(body)
     }
 }

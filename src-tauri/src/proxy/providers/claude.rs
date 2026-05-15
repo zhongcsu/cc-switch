@@ -37,6 +37,7 @@ pub fn get_claude_api_format(provider: &Provider) -> &'static str {
                 "openai_chat" => "openai_chat",
                 "openai_responses" => "openai_responses",
                 "gemini_native" => "gemini_native",
+                "minimax_chat" => "minimax_chat",
                 _ => "anthropic",
             };
         }
@@ -52,6 +53,7 @@ pub fn get_claude_api_format(provider: &Provider) -> &'static str {
             "openai_chat" => "openai_chat",
             "openai_responses" => "openai_responses",
             "gemini_native" => "gemini_native",
+            "minimax_chat" => "minimax_chat",
             _ => "anthropic",
         };
     }
@@ -78,7 +80,7 @@ pub fn get_claude_api_format(provider: &Provider) -> &'static str {
 pub fn claude_api_format_needs_transform(api_format: &str) -> bool {
     matches!(
         api_format,
-        "openai_chat" | "openai_responses" | "gemini_native"
+        "openai_chat" | "openai_responses" | "gemini_native" | "minimax_chat"
     )
 }
 
@@ -173,6 +175,11 @@ pub fn transform_claude_request_for_api_format(
             Some(&provider.id),
             session_id,
         ),
+        "minimax_chat" => {
+            // MiniMax 使用 Chat Completions 格式，但来自 Codex CLI (Responses API) 的请求需要转换
+            // 将 Responses API 格式转换为 Chat Completions 格式
+            super::transform_chat_to_responses::responses_to_chat_completions(body)
+        }
         _ => Ok(body),
     }
 }
@@ -640,7 +647,7 @@ impl ProviderAdapter for ClaudeAdapter {
         )
     }
 
-    fn transform_response(&self, body: serde_json::Value) -> Result<serde_json::Value, ProxyError> {
+    fn transform_response(&self, body: serde_json::Value, _provider: &Provider) -> Result<serde_json::Value, ProxyError> {
         // Heuristic: detect response format by presence of top-level fields.
         // The ProviderAdapter trait's transform_response doesn't receive the Provider
         // config, so we can't check api_format here. Instead we rely on the fact that

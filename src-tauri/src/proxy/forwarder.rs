@@ -946,6 +946,29 @@ impl RequestForwarder {
                     .as_deref()
                     .unwrap_or_else(|| super::providers::get_claude_api_format(provider));
                 rewrite_claude_transform_endpoint(endpoint, api_format, is_copilot, &mapped_body)
+            } else if needs_transform && adapter.name() == "Codex" {
+                // For Codex with minimax_chat, use Chat Completions endpoint instead of /responses
+                let api_format = provider
+                    .meta
+                    .as_ref()
+                    .and_then(|meta| meta.api_format.as_deref());
+                if api_format == Some("minimax_chat") {
+                    // MiniMax uses Chat Completions endpoint
+                    let (path, query) = split_endpoint_and_query(endpoint);
+                    let new_path = if path == "/responses" || path == "/v1/responses" {
+                        path.replace("/responses", "/chat/completions")
+                    } else {
+                        path.to_string()
+                    };
+                    (new_path, query.map(ToString::to_string))
+                } else {
+                    (
+                        endpoint.to_string(),
+                        split_endpoint_and_query(endpoint)
+                            .1
+                            .map(ToString::to_string),
+                    )
+                }
             } else {
                 (
                     endpoint.to_string(),
