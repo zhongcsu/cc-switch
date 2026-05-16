@@ -29,4 +29,8 @@ copilot-api
 .history
 CODEBUDDY.md
 .github
+<<<<<<< HEAD
 .gitnexus/
+=======
+mainWindow.js
+>>>>>>> upstream/main
